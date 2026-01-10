@@ -1,0 +1,67 @@
+# Streamlit Configuration
+# This file configures the Streamlit application settings
+
+[server]
+# Maximum upload size in MB
+maxUploadSize = 200
+
+# Maximum message size in MB
+maxMessageSize = 200
+
+# Enable CORS (set to true if accessing from different domain)
+enableCORS = true
+
+# Enable XSRF protection
+enableXsrfProtection = true
+
+# Port to run on (default is 8501)
+port = 8502
+
+# Enable websocket compression
+enableWebsocketCompression = true
+
+[runner]
+# Enable magic commands (automatic display of variables)
+magicEnabled = true
+
+# Enable fast reruns
+fastReruns = true
+
+[client]
+# Show error details to user
+showErrorDetails = true
+
+# Show toolbar in app
+toolbarMode = "auto"
+
+[browser]
+# Automatically open browser on start
+gatherUsageStats = false
+
+# Server address (use 'localhost' for local only)
+serverAddress = "localhost"
+
+[theme]
+# Primary color for interactive elements
+primaryColor = "#1f77b4"
+
+# Background color
+backgroundColor = "#ffffff"
+
+# Secondary background color (for sidebar, etc.)
+secondaryBackgroundColor = "#f0f2f6"
+
+# Text color
+textColor = "#262730"
+
+# Font family
+font = "sans serif"
+
+[logger]
+# Logging level: 'error', 'warning', 'info', 'debug'
+level = "info"
+
+# Message format
+messageFormat = "%(asctime)s %(message)s"
+
+[deprecation]

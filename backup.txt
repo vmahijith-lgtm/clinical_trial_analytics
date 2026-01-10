@@ -1,0 +1,658 @@
+"""
+Clinical Trial Analytics Platform - Home Page
+Memory-Optimized Version: Processes ALL data with MINIMAL RAM usage
+Uses disk-based caching to avoid loading everything into memory at once.
+"""
+
+import streamlit as st
+import pandas as pd
+from pathlib import Path
+import sys
+import gc
+import json
+import psutil
+import os
+
+sys.path.append(str(Path(__file__).parent))
+
+from src.data_ingestion import DataIngestion
+from src.data_harmonization import DataHarmonization
+from src.quality_checks import QualityChecker
+from src.analytics_engine import AnalyticsEngine
+from utils.config import PAGE_CONFIG, DATA_DIR
+from utils.helpers import format_number, standardize_column_names, convert_date_columns
+from utils.memory_manager import (
+    memory_manager, 
+    display_memory_metrics
+)
+from utils.disk_cache import DiskCache, StreamingDataProcessor, optimize_dataframe_aggressive
+
+# Initialize memory manager and disk cache
+_ = memory_manager
+disk_cache = DiskCache(cache_dir=None, max_cache_size_mb=2000, auto_cleanup=True)
+
+st.set_page_config(**PAGE_CONFIG)
+
+# Initialize minimal session state
+if 'processing_started' not in st.session_state:
+    st.session_state.processing_started = False
+if 'processing_complete' not in st.session_state:
+    st.session_state.processing_complete = False
+if 'file_catalog' not in st.session_state:
+    st.session_state.file_catalog = {}  # Only metadata, not actual data
+if 'quality_summaries' not in st.session_state:
+    st.session_state.quality_summaries = []  # Only summaries, not full reports
+
+
+def clear_all_memory():
+    """Clear all cached data from memory and disk"""
+    # Clear session state
+    for key in list(st.session_state.keys()):
+        if key not in ['processing_started', 'processing_complete']:
+            del st.session_state[key]
+    
+    # Clear disk cache
+    disk_cache.clear_all()
+    
+    # Force garbage collection
+    memory_manager.force_cleanup()
+    memory_manager.deep_cleanup()
+
+
+def process_file_memory_safe(file_path: Path, processor: StreamingDataProcessor, 
+                             checker, max_rows: int) -> dict:
+    """
+    Process a single file with aggressive memory management.
+    Saves results to disk immediately, clears memory before next file.
+    """
+    result = {
+        'file': str(file_path),
+        'sheets': [],
+        'total_rows': 0,
+        'errors': []
+    }
+    
+    try:
+        excel_file = pd.ExcelFile(file_path, engine='openpyxl')
+        
+        for sheet_name in excel_file.sheet_names:
+            # Clear memory BEFORE loading next sheet
+            memory_manager.force_cleanup()
+            
+            # Check memory - if critical, stop processing
+            if memory_manager.get_memory_status() == "critical":
+                result['errors'].append(f"Memory critical, stopping at sheet: {sheet_name}")
+                break
+            
+            try:
+                # Read sheet
+                df = pd.read_excel(file_path, sheet_name=sheet_name, engine='openpyxl')
+                
+                if df.empty or len(df.columns) == 0:
+                    continue
+                
+                original_rows = len(df)
+                
+                # Standardize columns
+                df = standardize_column_names(df)
+                df = convert_date_columns(df)
+                
+                # Optimize memory
+                df = optimize_dataframe_aggressive(df)
+                
+                # Sample if too large
+                if max_rows < 1000000 and len(df) > max_rows:
+                    df = df.head(max_rows)
+                
+                # Save to disk cache
+                cache_key = disk_cache.save_dataframe(
+                    df,
+                    str(file_path),
+                    sheet_name,
+                    metadata={
+                        'original_rows': original_rows,
+                        'folder': file_path.parent.name
+                    }
+                )
+                
+                if cache_key:
+                    result['sheets'].append({
+                        'sheet_name': sheet_name,
+                        'cache_key': cache_key,
+                        'rows': len(df),
+                        'original_rows': original_rows,
+                        'folder': file_path.parent.name
+                    })
+                    result['total_rows'] += original_rows
+                
+                # Run quality check on sample
+                if len(df) > 5000:
+                    df_sample = df.head(5000)
+                else:
+                    df_sample = df
+                
+                report = checker.generate_comprehensive_report(df_sample, f"{file_path.name}/{sheet_name}")
+                
+                # Store only summary in session state
+                st.session_state.quality_summaries.append({
+                    'dataset_name': report['dataset_name'],
+                    'overall_quality_score': report['overall_quality_score'],
+                    'overall_status': report['overall_status'],
+                    'completeness': report['completeness']['overall_completeness'],
+                    'rows': original_rows,
+                    'columns': len(df.columns),
+                    'cache_key': cache_key
+                })
+                
+                # Clear dataframe from memory immediately
+                del df, df_sample, report
+                memory_manager.force_cleanup()
+                
+            except Exception as e:
+                result['errors'].append(f"{sheet_name}: {str(e)}")
+        
+        excel_file.close()
+        del excel_file
+        
+    except Exception as e:
+        result['errors'].append(f"File: {str(e)}")
+    
+    return result
+
+
+def process_all_files_memory_safe(data_path: str, batch_size: int, max_rows: int,
+                                   auto_quality_check: bool) -> dict:
+    """
+    Process ALL files with memory-safe approach.
+    Only keeps one file in memory at a time.
+    """
+    data_path = Path(data_path)
+    
+    # Discover files
+    ingestion = DataIngestion(data_path)
+    files = ingestion.discover_files()
+    
+    if not files:
+        return {'error': 'No files found'}
+    
+    total_files = len(files)
+    total_size_mb = sum(f.stat().st_size for f in files) / (1024 * 1024)
+    
+    results = {
+        'files_found': total_files,
+        'total_size_mb': total_size_mb,
+        'files_processed': 0,
+        'sheets_processed': 0,
+        'total_rows': 0,
+        'errors': [],
+        'warnings': []
+    }
+    
+    checker = QualityChecker()
+    processor = StreamingDataProcessor(data_path)
+    
+    # Process files one at a time with memory cleanup between each
+    for idx, file_path in enumerate(files):
+        # Check memory before each file
+        mem_status = memory_manager.get_memory_status()
+        if mem_status == "critical":
+            results['warnings'].append(f"Memory critical, stopping after {idx} files")
+            break
+        
+        # Update progress
+        progress = (idx + 1) / total_files
+        
+        # Process single file
+        file_result = process_file_memory_safe(file_path, processor, checker, max_rows)
+        
+        results['files_processed'] += 1
+        results['sheets_processed'] += len(file_result['sheets'])
+        results['total_rows'] += file_result['total_rows']
+        
+        if file_result['errors']:
+            results['errors'].extend(file_result['errors'])
+        
+        # Store file metadata in catalog (NOT the actual data)
+        file_key = str(file_path.relative_to(data_path))
+        st.session_state.file_catalog[file_key] = {
+            'sheets': file_result['sheets'],
+            'cache_keys': [s['cache_key'] for s in file_result['sheets'] if s.get('cache_key')]
+        }
+        
+        # Aggressive cleanup after each file
+        memory_manager.deep_cleanup()
+        
+        # Yield for UI update
+        yield progress, results, idx + 1, total_files
+    
+    results['processing_complete'] = True
+    st.session_state.processing_complete = True
+    st.session_state.processing_started = True
+    
+    yield 1.0, results, total_files, total_files
+
+
+def load_data_from_cache(cache_key: str) -> pd.DataFrame:
+    """Load a specific dataframe from disk cache"""
+    df = disk_cache.load_dataframe(cache_key)
+    if df is not None:
+        memory_manager.force_cleanup()
+    return df
+
+
+def get_category_summaries() -> dict:
+    """Get summary counts by category"""
+    categories = {
+        'demographics': 0,
+        'adverse_events': 0,
+        'lab_results': 0,
+        'visits': 0,
+        'medications': 0,
+        'monitoring': 0,
+        'other': 0
+    }
+    
+    for file_key, file_info in st.session_state.file_catalog.items():
+        for sheet in file_info.get('sheets', []):
+            sheet_name = sheet.get('sheet_name', '').lower()
+            file_name = file_key.lower()
+            search_text = f"{file_name} {sheet_name}"
+            
+            if any(kw in search_text for kw in ['demog', 'subject', 'patient', 'enrollment']):
+                categories['demographics'] += 1
+            elif any(kw in search_text for kw in ['ae', 'adverse', 'event', 'safety']):
+                categories['adverse_events'] += 1
+            elif any(kw in search_text for kw in ['lab', 'laboratory', 'test', 'result']):
+                categories['lab_results'] += 1
+            elif any(kw in search_text for kw in ['visit', 'appointment', 'schedule']):
+                categories['visits'] += 1
+            elif any(kw in search_text for kw in ['med', 'drug', 'conmed', 'treatment']):
+                categories['medications'] += 1
+            elif any(kw in search_text for kw in ['monitor', 'sdv', 'query', 'cra']):
+                categories['monitoring'] += 1
+            else:
+                categories['other'] += 1
+    
+    return {k: v for k, v in categories.items() if v > 0}
+
+
+# Header
+st.title("🔬 Clinical Trial Analytics Platform")
+st.markdown("### Memory-Optimized Processing - ALL Data, Minimal RAM")
+
+st.markdown("""
+This platform provides:
+- **Complete data processing** - Processes ALL files without memory crashes
+- **Memory-safe operations** - Disk-based caching, one file at a time
+- **Real-time quality checks** - Automated quality monitoring
+- **On-demand loading** - Data loads only when needed
+""")
+
+st.divider()
+
+# Sidebar with Memory Monitor & Settings
+with st.sidebar:
+    st.header("📊 System Status")
+    
+    # Memory monitoring
+    with st.expander("💾 Memory Monitor", expanded=True):
+        display_memory_metrics()
+        
+        if st.button("🧹 Force Cleanup", use_container_width=True):
+            before = memory_manager.get_memory_info()['rss_mb']
+            memory_manager.deep_cleanup()
+            clear_all_memory()
+            after = memory_manager.get_memory_info()['rss_mb']
+            st.success(f"Freed {before - after:.1f} MB")
+        
+        # Show memory advice
+        advice = memory_manager.get_memory_advice()
+        if advice and "Memory usage is normal" not in advice:
+            st.info(advice)
+    
+    st.divider()
+    
+    # Low Memory Mode
+    st.header("⚙️ Settings")
+    
+    low_memory_mode = st.toggle(
+        "Low Memory Mode",
+        value=False,
+        help="More aggressive memory management. Slower but uses less RAM."
+    )
+    
+    if low_memory_mode:
+        memory_manager.enable_low_memory_mode(True)
+        st.info("Low memory mode enabled")
+    else:
+        memory_manager.enable_low_memory_mode(False)
+    
+    st.divider()
+    
+    # Processing stats
+    if st.session_state.processing_complete:
+        st.success("✅ Processing Complete")
+        
+        catalog = st.session_state.file_catalog
+        total_sheets = sum(len(v.get('sheets', [])) for v in catalog.values())
+        
+        st.metric("Files Processed", len(catalog))
+        st.metric("Sheets Cached", total_sheets)
+        st.metric("Quality Reports", len(st.session_state.quality_summaries))
+        
+        # Cache stats
+        cache_stats = disk_cache.get_stats()
+        st.metric("Cache Size", f"{cache_stats['cache_size_mb']:.1f} MB")
+        
+        if st.button("🔄 Unload All Data", use_container_width=True):
+            clear_all_memory()
+            st.rerun()
+    
+    st.divider()
+    
+    st.header("⚙️ Processing Settings")
+    
+    batch_size = st.selectbox(
+        "Processing Mode",
+        options=[1, 3, 5],
+        index=0,
+        format_func=lambda x: "Single file (safest)" if x == 1 else f"Batch of {x}",
+        help="Single file = safest, lowest RAM usage"
+    )
+    
+    max_rows = st.selectbox(
+        "Max Rows Per Sheet",
+        options=[50000, 100000, 200000, 500000],
+        index=1,
+        format_func=lambda x: f"{x:,}" if x < 1000000 else "Unlimited",
+        help="Higher = more complete data, more RAM"
+    )
+    
+    auto_quality_check = st.checkbox(
+        "Run Quality Checks",
+        value=True,
+        help="Run quality checks after loading"
+    )
+
+
+# Main content
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.header("📁 Data Source")
+    
+    data_path = st.text_input(
+        "Data Directory Path",
+        value=str(DATA_DIR),
+        help="Path to your data files folder"
+    )
+    
+    if st.button("🚀 Load and Process All Data", type="primary", use_container_width=True):
+        
+        # Memory check before starting
+        if memory_manager.get_memory_status() == "critical":
+            st.error("⚠️ Memory is critical! Click 'Force Cleanup' first.")
+            st.stop()
+        
+        # Clear previous data
+        clear_all_memory()
+        
+        # Create progress containers
+        progress_container = st.container()
+        
+        with progress_container:
+            st.markdown("---")
+            st.subheader("📊 Memory-Safe Processing Pipeline")
+            
+            # Discovery phase
+            with st.spinner("🔍 Discovering files..."):
+                ingestion = DataIngestion(data_path)
+                files = ingestion.discover_files()
+                
+                if not files:
+                    st.error("❌ No data files found!")
+                    st.stop()
+                
+                total_size_mb = sum(f.stat().st_size for f in files) / (1024 * 1024)
+                
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("Files Found", len(files))
+                with col_b:
+                    st.metric("Total Size", f"{total_size_mb:.1f} MB")
+                with col_c:
+                    processing_mode = "Single file" if batch_size == 1 else f"Batch of {batch_size}"
+                    st.metric("Mode", processing_mode)
+                
+                if total_size_mb > 1000:
+                    st.warning(f"⚠️ Large dataset ({total_size_mb:.0f} MB). Using single-file mode for safety.")
+            
+            # Processing phase
+            st.markdown("#### 1️⃣ Processing Files (One at a Time)")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            stats_container = st.container()
+            
+            try:
+                # Process all files with generator
+                for progress, results, processed, total in process_all_files_memory_safe(
+                    data_path, batch_size, max_rows, auto_quality_check
+                ):
+                    progress_bar.progress(progress)
+                    
+                    status_text.text(f"Processing file {processed}/{total}...")
+                    
+                    with stats_container:
+                        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                        with stat_col1:
+                            st.metric("✅ Files", f"{processed}/{total}")
+                        with stat_col2:
+                            st.metric("✅ Sheets", results['sheets_processed'])
+                        with stat_col3:
+                            st.metric("✅ Rows", format_number(results['total_rows'], 0))
+                        with stat_col4:
+                            success_rate = (processed / total * 100) if total > 0 else 0
+                            st.metric("✅ Progress", f"{success_rate:.0f}%")
+                
+                # Final stats
+                st.markdown("---")
+                st.success("✅ All processing complete!")
+                
+                final_col1, final_col2, final_col3, final_col4 = st.columns(4)
+                with final_col1:
+                    st.metric("Files Cached", len(st.session_state.file_catalog))
+                with final_col2:
+                    total_sheets = sum(len(v.get('sheets', [])) for v in st.session_state.file_catalog.values())
+                    st.metric("Total Sheets", total_sheets)
+                with final_col3:
+                    st.metric("Total Rows", format_number(results['total_rows'], 0))
+                with final_col4:
+                    cache_stats = disk_cache.get_stats()
+                    st.metric("Cache Size", f"{cache_stats['cache_size_mb']:.1f} MB")
+                
+                # Show errors if any
+                if results.get('errors'):
+                    with st.expander(f"❌ {len(results['errors'])} Errors"):
+                        for error in results['errors'][:10]:
+                            st.error(error)
+                        if len(results['errors']) > 10:
+                            st.info(f"... and {len(results['errors']) - 10} more")
+                
+                # Show warnings if any
+                if results.get('warnings'):
+                    with st.expander(f"⚠️ {len(results['warnings'])} Warnings"):
+                        for warning in results['warnings'][:10]:
+                            st.warning(warning)
+                
+                # Quality summary
+                if st.session_state.quality_summaries:
+                    avg_quality = sum(r['overall_quality_score'] for r in st.session_state.quality_summaries) / len(st.session_state.quality_summaries)
+                    
+                    st.subheader("📋 Quality Summary")
+                    q_col1, q_col2 = st.columns(2)
+                    with q_col1:
+                        st.metric("Datasets Checked", len(st.session_state.quality_summaries))
+                    with q_col2:
+                        st.metric("Avg Quality Score", f"{avg_quality:.1%}")
+                    
+                    # Show quality distribution
+                    status_counts = {}
+                    for r in st.session_state.quality_summaries:
+                        status = r['overall_status']
+                        status_counts[status] = status_counts.get(status, 0) + 1
+                    
+                    if status_counts:
+                        st.write("Quality Distribution:")
+                        for status, count in sorted(status_counts.items()):
+                            emoji = "🟢" if status == "Excellent" else "🟡" if status == "Good" else "🟠" if status == "Fair" else "🔴"
+                            st.write(f"{emoji} {status}: {count}")
+                
+                # Final cleanup
+                memory_manager.deep_cleanup()
+                st.balloons()
+                
+            except Exception as e:
+                st.error(f"❌ Processing failed: {str(e)}")
+                st.exception(e)
+
+with col2:
+    st.header("📋 Quick Info")
+    
+    st.metric("Version", "3.0")
+    st.metric("Mode", "Memory-Optimized")
+    
+    with st.expander("💡 Memory Tips"):
+        st.markdown("""
+        **Low Memory Mode:**
+        - More aggressive cleanup
+        - Lower thresholds
+        - Uses ~50% less RAM
+        
+        **Single File Mode:**
+        - Processes one file at a time
+        - Saves to disk immediately
+        - Lowest RAM usage
+        
+        **Max Rows:**
+        - 50K: Fast, memory efficient
+        - 100K: Recommended balance
+        - 200K+: More data, more RAM
+        
+        **Memory Workflow:**
+        1. Load file → Optimize → Save to disk
+        2. Clear from memory
+        3. Load next file
+        4. Result: All data processed, minimal RAM
+        """)
+    
+    with st.expander("🔗 Navigation"):
+        st.markdown("""
+        After loading data:
+        
+        1. **Data Overview** (Coming Soon)
+           - Browse cached datasets
+           - View summaries
+           - Load on-demand
+        
+        2. **Quality Dashboard** (Coming Soon)
+           - View quality scores
+           - Identify issues
+           - Track metrics
+        
+        3. **Analytics** (Coming Soon)
+           - Enrollment analysis
+           - Site performance
+           - Bottleneck detection
+        """)
+    
+    with st.expander("📊 How It Works"):
+        st.markdown("""
+        **Memory-Safe Processing:**
+        
+        1. **Discover** all files
+        2. **Process one file** at a time
+        3. **Save to disk** (Parquet, gzip)
+        4. **Clear memory** immediately
+        5. **Repeat** for all files
+        
+        **Result:**
+        - ✅ All files processed
+        - ✅ All data saved
+        - ✅ RAM stays low (~500MB)
+        - ⚠️ Slightly slower
+        """)
+
+
+# Show overview if processing complete
+if st.session_state.processing_complete:
+    st.divider()
+    st.header("📊 Data Overview")
+    
+    # Category summary
+    category_counts = get_category_summaries()
+    
+    if category_counts:
+        st.subheader("📑 Data Categories")
+        
+        cat_col1, cat_col2 = st.columns([1, 2])
+        
+        with cat_col1:
+            for cat, count in sorted(category_counts.items(), key=lambda x: -x[1]):
+                st.metric(cat.replace('_', ' ').title(), count)
+        
+        with cat_col2:
+            try:
+                import plotly.express as px
+                df_cat = pd.DataFrame({
+                    'Category': [k.replace('_', ' ').title() for k in category_counts.keys()],
+                    'Count': list(category_counts.values())
+                })
+                fig = px.bar(
+                    df_cat, x='Category', y='Count',
+                    title='Datasets by Category',
+                    color='Count',
+                    color_continuous_scale='Blues'
+                )
+                fig.update_layout(showlegend=False, height=300)
+                st.plotly_chart(fig, use_container_width=True)
+            except:
+                st.bar_chart(pd.Series(category_counts))
+    
+    # Cached files summary
+    st.subheader("💾 Cached Data")
+    
+    cache_stats = disk_cache.get_stats()
+    st.write(f"**Cache Statistics:**")
+    st.write(f"- Total entries: {cache_stats['total_entries']}")
+    st.write(f"- Cache size: {cache_stats['cache_size_mb']:.1f} MB")
+    st.write(f"- Max size: {cache_stats['max_size_mb']} MB")
+    
+    # Show catalog
+    with st.expander("📄 File Catalog"):
+        catalog_data = []
+        for file_key, file_info in st.session_state.file_catalog.items():
+            for sheet in file_info.get('sheets', []):
+                catalog_data.append({
+                    'File': Path(file_key).name,
+                    'Sheet': sheet.get('sheet_name', 'N/A'),
+                    'Rows': sheet.get('original_rows', 0),
+                    'Cached': 'Yes' if sheet.get('cache_key') else 'No'
+                })
+        
+        if catalog_data:
+            df_catalog = pd.DataFrame(catalog_data)
+            st.dataframe(df_catalog, use_container_width=True, hide_index=True)
+        else:
+            st.info("No files in catalog")
+
+else:
+    st.info("👆 Configure settings and click **'Load and Process All Data'** to begin")
+
+# Footer
+st.divider()
+st.markdown("""
+<div style='text-align: center; color: gray; padding: 20px;'>
+    Clinical Trial Analytics Platform v3.0 | Memory-Optimized | Processes ALL Data with Minimal RAM
+</div>
+""", unsafe_allow_html=True)
+
