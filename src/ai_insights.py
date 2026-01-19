@@ -79,7 +79,7 @@ Be concise, actionable, and focus on clinical trial operations."""
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -112,7 +112,7 @@ Be specific and data-driven."""
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -150,7 +150,7 @@ Prioritize by severity and impact."""
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1200,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -180,7 +180,7 @@ Provide a helpful, accurate response based on the available data. If you need mo
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -213,7 +213,7 @@ Format for executive audience - clear, concise, actionable."""
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -245,7 +245,7 @@ Be realistic and data-driven."""
         
         try:
             response = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-haiku-20240307",
                 max_tokens=1200,
                 messages=[{"role": "user", "content": prompt}]
             )
