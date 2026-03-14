@@ -1,0 +1,63 @@
+# =============================================================
+# Clinical Trial Analytics – .gitignore
+# =============================================================
+
+# ── Secrets & Environment ─────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+
+# ── Virtual Environments ──────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Database & Generated Artifacts ───────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+database/analytics.db
+database/processed_data/
+
+# ── Raw Data Files (sensitive / large) ───────────────────────
+data/
+
+# ── macOS ─────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# ── IDE / Editors ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Jupyter ───────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Testing & Coverage ────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Streamlit cache ───────────────────────────────────────────
+.streamlit/secrets.toml
