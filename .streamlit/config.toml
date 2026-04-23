@@ -8,14 +8,20 @@ maxUploadSize = 200
 # Maximum message size in MB
 maxMessageSize = 200
 
-# Enable CORS (set to true if accessing from different domain)
-enableCORS = true
+# Enable CORS (for same-origin app hosting, false is recommended)
+enableCORS = false
 
 # Enable XSRF protection
 enableXsrfProtection = true
 
-# Port to run on (default is 8501)
-port = 8502
+# Port to run on (can be overridden via CLI in deployment)
+port = 8501
+
+# Required for most container and cloud deployments
+headless = true
+
+# Bind to all interfaces so reverse proxies can reach the app
+address = "0.0.0.0"
 
 # Enable websocket compression
 enableWebsocketCompression = true
@@ -38,8 +44,8 @@ toolbarMode = "auto"
 # Automatically open browser on start
 gatherUsageStats = false
 
-# Server address (use 'localhost' for local only)
-serverAddress = "localhost"
+# Server address for link generation
+serverAddress = "0.0.0.0"
 
 [theme]
 # Primary color for interactive elements
@@ -63,5 +69,3 @@ level = "info"
 
 # Message format
 messageFormat = "%(asctime)s %(message)s"
-
-[deprecation]

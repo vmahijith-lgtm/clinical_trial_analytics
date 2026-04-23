@@ -11,11 +11,15 @@ load_dotenv()
 
 # Project paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data" / "QC Anonymized Study Files"
+
+# Runtime data directory can be overridden for deployments.
+# Defaults to a local ./data folder to avoid hard-coded subpaths.
+DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
 CACHE_DIR = BASE_DIR / "cache"
 
 # Ensure directories exist
-CACHE_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # API Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -31,8 +35,7 @@ QUALITY_THRESHOLDS = {
 # File patterns to look for
 FILE_PATTERNS = [
     "*.xlsx",
-    "*.xls",
-    "*.csv"
+    "*.xls"
 ]
 
 # Column mapping patterns (common variations)

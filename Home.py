@@ -694,17 +694,13 @@ with col1:
                     st.metric("💾 DB Size", f"{db_stats['total_size_mb']:.1f} MB")
                 
                 # Show storage location
-                from pathlib import Path
-                db_path = Path("database/analytics.db")
-                cache_path = Path("database/processed_data/parquet_files")
-                
                 st.info(f"""
                 **📁 Data Storage Locations:**
                 
                 • **Database:** `database/analytics.db`
-                • **Processed Parquet Files:** `database/processed_data/parquet_files/`
+                • **Runtime Cache Folder:** `database/processed_data/`
                 
-                All data is now persisted and can be viewed with SQLite DB Browser.
+                Dataset payloads are persisted in SQLite and remain available across app restarts.
                 """)
                 
                 # Show quality distribution

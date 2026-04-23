@@ -1,162 +1,99 @@
 # Clinical Trial Analytics Platform
 
-A **Streamlit-powered web application** for processing, analyzing, and exploring clinical trial data stored in Excel format. The platform provides quality dashboards, statistical analytics, and a natural-language "Chat with Data" interface backed by AI.
-
----
+Streamlit application for ingesting and analyzing clinical trial Excel data with quality checks, interactive analytics, and optional AI-assisted insights.
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| 📂 **Data Overview** | Browse, search, and explore all ingested datasets |
-| ✅ **Quality Dashboard** | Automated quality scoring, metrics, and flagging |
-| 📊 **Analytics** | Statistical analysis, correlation, and interactive charts |
-| 💬 **Chat with Data** | Ask questions in plain English and get instant results |
-| 💾 **Data Export** | Download query results as CSV, Excel, or JSON |
-
----
-
-## Architecture
-
-```
-clinical_trial_analytics/
-├── Home.py                  # Entry point – file processing & database management
-├── pages/
-│   ├── 1_Data_Overview.py   # Dataset browser
-│   ├── 2_Quality_Dashboard.py  # Quality metrics & scoring
-│   ├── 3_Analytics.py       # Statistical analysis & visualizations
-│   └── 5_Chat_with_Data.py  # Natural language query interface
-├── src/
-│   ├── data_ingestion.py    # Excel file reading & preprocessing
-│   ├── data_harmonization.py  # Data cleaning & standardization
-│   ├── quality_checks.py    # Quality metrics & scoring engine
-│   ├── analytics_engine.py  # Statistical analysis functions
-│   └── ai_insights.py       # AI-powered analysis tools
-├── utils/
-│   ├── database.py          # SQLite interface
-│   ├── disk_cache.py        # Cache key generation
-│   ├── helpers.py           # Shared helper functions
-│   ├── memory_manager.py    # Memory optimization utilities
-│   └── config.py            # App-wide configuration
-├── database/
-│   └── analytics.db         # SQLite database (auto-generated, gitignored)
-├── data/                    # Raw Excel study files (gitignored)
-├── .streamlit/
-│   └── config.toml          # Streamlit UI configuration
-├── requirements.txt
-└── .env.example             # Environment variable template
-```
-
----
+- Data ingestion from Excel workbooks (`.xlsx`, `.xls`)
+- Data quality dashboard and summary metrics
+- Analytics and statistical exploration views
+- Chat-style data interaction and multi-format exports
+- SQLite-backed persistence across restarts
 
 ## Prerequisites
 
-- Python **3.9+**
+- Python 3.11+ recommended
 - pip
 
----
+## Quick Start (Local)
 
-## Setup
-
-### 1. Clone the repository
+1. Clone and enter the repository.
+2. Create and activate a virtual environment.
+3. Install dependencies.
+4. Copy environment template.
+5. Start Streamlit.
 
 ```bash
 git clone https://github.com/vmahijith-lgtm/clinical_trial_analytics.git
 cd clinical_trial_analytics
-```
 
-### 2. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate
 
-```bash
-python -m venv venv
-# macOS / Linux
-source venv/bin/activate
-# Windows
-venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
-```
-
-### 4. Configure environment variables
-
-```bash
 cp .env.example .env
-```
 
-Open `.env` and set your Anthropic API key:
-
-```env
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-```
-
-> **Note**: The AI "Chat with Data" feature requires a valid [Anthropic API key](https://console.anthropic.com/). All other features work without it.
-
-### 5. Add your data
-
-Place your clinical trial Excel (`.xlsx` / `.xls`) files inside the `data/` directory. The app will auto-detect and process them on startup.
-
-### 6. Run the app
-
-```bash
 streamlit run Home.py
 ```
 
-The app will open at **http://localhost:8501** in your browser.
+The app is available at `http://localhost:8501`.
 
----
+## Data Directory
 
-## How It Works
+By default, the app scans `data/` for Excel files.
 
-1. **Ingest** – Excel files are read sheet-by-sheet into memory, validated, and cleaned.
-2. **Store** – Each dataset is pickled and stored as a BLOB in a local SQLite database (`database/analytics.db`), enabling persistence across app restarts.
-3. **Explore** – Pages provide interactive views: data browsing, quality scoring, advanced analytics, and AI chat.
-4. **Export** – Query results can be downloaded in CSV, Excel, or JSON format at any time.
-
-### Performance Characteristics
-- Processing: ~1–2 seconds per Excel sheet
-- Memory peak: ~300–500 MB during ingestion
-- Storage: ~50–100 MB per 100,000 rows in the database
-
----
+- Local default: `./data`
+- Override with environment variable: `DATA_DIR=/absolute/path/to/data`
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Optional* | Powers the "Chat with Data" AI feature |
+| Variable | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | No | Enables AI-powered chat/insights features |
+| `DATA_DIR` | No | Overrides default input data directory |
 
-\* The app runs fully without this key; only the Chat feature will be disabled.
+If `ANTHROPIC_API_KEY` is not set, the rest of the platform still works.
 
----
+## Deployment
 
-## Tech Stack
+### Option 1: Docker
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | [Streamlit](https://streamlit.io/) |
-| Data Processing | [Pandas](https://pandas.pydata.org/), [NumPy](https://numpy.org/) |
-| Analytics | [SciPy](https://scipy.org/), [Scikit-learn](https://scikit-learn.org/), [Seaborn](https://seaborn.pydata.org/) |
-| Visualization | [Plotly](https://plotly.com/python/) |
-| Storage | SQLite (via Python `sqlite3`) |
-| AI | [Anthropic Claude](https://www.anthropic.com/) (`anthropic` SDK) |
-| Excel I/O | [openpyxl](https://openpyxl.readthedocs.io/), [xlrd](https://xlrd.readthedocs.io/) |
+```bash
+docker build -t clinical-trial-analytics .
+docker run --rm -p 8501:8501 \
+	-e PORT=8501 \
+	-e DATA_DIR=/app/data \
+	-e ANTHROPIC_API_KEY=your_key_if_needed \
+	clinical-trial-analytics
+```
 
----
+Notes:
 
-## Contributing
+- Mount a host data directory if needed: `-v /host/data:/app/data`
+- SQLite database is written to `database/analytics.db` in the container filesystem unless you mount persistent storage.
 
-1. Fork the repo
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m "feat: add your feature"`
-4. Push to the branch: `git push origin feature/your-feature`
-5. Open a Pull Request
+### Option 2: PaaS / Buildpack-style Deployments
 
----
+This repository includes a `Procfile`:
+
+```text
+web: streamlit run Home.py --server.address=0.0.0.0 --server.port=$PORT
+```
+
+Use this for platforms like Render, Railway, or other process-based Python deploy targets.
+
+### Option 3: Streamlit Community Cloud
+
+1. Connect the repository in Streamlit Cloud.
+2. Set main file to `Home.py`.
+3. Add secrets (optional) for `ANTHROPIC_API_KEY`.
+4. Ensure data source strategy is defined (uploaded files, external storage, or mounted volume pattern).
+
+## Storage Model
+
+- Metadata and dataset payloads are persisted in SQLite (`database/analytics.db`).
+- Runtime cache folders may be used for temporary processing artifacts.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
